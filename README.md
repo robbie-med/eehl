@@ -69,7 +69,7 @@ tests/           e2e smoke test and screenshot script
 
 ## Correctness
 
-- `npm test` runs ~60 unit tests: every day from 1900 to 2100 round-trips through both lunar calendars, DST gaps and overlaps, month-end clamping, day-one counting, widget segments against the engine, backups and encryption.
+- `npm test` runs ~80 unit tests: every day from 1900 to 2100 round-trips through both lunar calendars, DST gaps and overlaps, month-end clamping, day-one counting, solar terms against published equinox times, Japanese eras, importers, share links, widget segments against the engine, backups and encryption.
 - `spec/golden.json` pins the engine's answers for ~5,000 cases: lunar dates, leap-month anniversaries under both rules, differences with every rounding mode, and 20 event types × 11 moments × 10 readouts. If the engine changes on purpose, regenerate with `UPDATE_GOLDEN=1 npx vitest run golden` and review the diff.
 - Lunar tables are generated from ICU by `npm run gen:lunar`, and solar terms from a full ephemeris (PyEphem) by `scripts/gen-solar-terms.py`. The app never asks the runtime for either, so every browser gives the same answer.
 - Holidays are statutory rules (including substitute holidays). One-off holidays such as election days, and China/Taiwan make-up workdays, are not included.
