@@ -1,0 +1,25 @@
+{
+  "name": "eehl · 일",
+  "short_name": "eehl",
+  "description": "Count-ups and countdowns with D-day, 100-day milestones and lunar dates. Offline, private, no Google.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f7f5f2",
+  "theme_color": "#d4532b",
+  "lang": "en",
+  "categories": ["lifestyle", "productivity", "utilities"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "New event", "short_name": "New", "url": "./#/new/custom", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Upcoming", "url": "./#/upcoming", "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

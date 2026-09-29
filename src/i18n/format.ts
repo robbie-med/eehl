@@ -124,11 +124,18 @@ export class Formatter {
     return n === 1 ? one : many;
   }
 
-  /** "3 years 2 months 5 days" / "3년 2개월 5일". Compact: "3y 2mo 5d". */
-  units(values: Partial<Record<Unit, number>>, units: Unit[], compact = false): string {
+  /** Selected units, largest first, without leading zeros ("9 months 5 days", not "0 years 9 months 5 days"). */
+  shownUnits(values: Partial<Record<Unit, number>>, units: Unit[]): Unit[] {
     const list = UNITS.filter((u) => units.includes(u));
     const used = list.length ? list : (['days'] as Unit[]);
-    const parts = used.map((u) => {
+    let i = 0;
+    while (i < used.length - 1 && !values[used[i]]) i++;
+    return used.slice(i);
+  }
+
+  /** "3 years 2 months 5 days" / "3년 2개월 5일". Compact: "3y 2mo 5d". */
+  units(values: Partial<Record<Unit, number>>, units: Unit[], compact = false): string {
+    const parts = this.shownUnits(values, units).map((u) => {
       const n = values[u] ?? 0;
       if (this.opts.lang === 'ko') return `${this.num(n)}${this.s.unitsShort[u]}`;
       return compact ? `${this.num(n)}${this.s.unitsShort[u]}` : `${this.num(n)} ${this.unitName(u, n)}`;
@@ -138,8 +145,7 @@ export class Formatter {
 
   /** Splits "1,234 days" into number and unit parts for big display. */
   unitParts(values: Partial<Record<Unit, number>>, units: Unit[]): { n: string; u: string }[] {
-    const list = UNITS.filter((u) => units.includes(u));
-    return (list.length ? list : (['days'] as Unit[])).map((u) => {
+    return this.shownUnits(values, units).map((u) => {
       const n = values[u] ?? 0;
       return { n: this.num(n), u: this.opts.lang === 'ko' ? this.s.unitsShort[u] : this.unitName(u, n) };
     });

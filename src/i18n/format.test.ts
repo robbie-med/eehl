@@ -35,3 +35,11 @@ describe('format', () => {
     expect(keys(ko).sort()).toEqual(keys(en).filter((k) => !/weddingNames\.\d+$/.test(k)).concat(keys(ko).filter((k) => /weddingNames\.\d+$/.test(k))).sort());
   });
 });
+
+describe('units display', () => {
+  it('drops leading zero units but keeps a final zero', () => {
+    expect(en1.units({ years: 0, months: 9, days: 5 }, ['years', 'months', 'days'])).toBe('9 months 5 days');
+    expect(en1.units({ years: 0, months: 0, days: 0 }, ['years', 'months', 'days'])).toBe('0 days');
+    expect(en1.units({ years: 1, months: 0, days: 5 }, ['years', 'months', 'days'])).toBe('1 year 0 months 5 days');
+  });
+});
