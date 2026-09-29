@@ -14,3 +14,5 @@ android/.kotlin/
 *.jks
 test-results/
 playwright-report/
+screens/
+e2e-failure.png

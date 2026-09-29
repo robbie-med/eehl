@@ -42,7 +42,12 @@ export function agenda(events: CountEvent[], fromDay: number, toDay: number): Ag
       items.push({ key: `${ev.id}:${m.key}`, event: ev, day: m.day, civil: m.civil, kind: 'milestone', milestone: m });
     }
   }
-  return items.sort((a, b) => a.day - b.day || a.event.title.localeCompare(b.event.title));
+  // A milestone on the same day as the event's own date (a named anniversary,
+  // a birthday) says more than the bare date; keep only the milestone.
+  const milestoneDays = new Set(items.filter((i) => i.kind === 'milestone').map((i) => `${i.event.id}:${i.day}`));
+  return items
+    .filter((i) => i.kind === 'milestone' || !milestoneDays.has(`${i.event.id}:${i.day}`))
+    .sort((a, b) => a.day - b.day || a.event.title.localeCompare(b.event.title));
 }
 
 export interface ScheduledNotification {

@@ -288,7 +288,7 @@ export function EventCard(props: { v: EventView; mode: 'full' | 'compact' | 'gri
         <Icon name="archive" />
       </div>
       <article
-        class={`card ${mode}${v.st.isToday ? ' today' : ''}`}
+        class={`card ${mode}${v.st.isToday ? ' today' : ''}${primary.shown.progress !== undefined && mode === 'full' ? ' stacked' : ''}`}
         style={{ '--accent': accent, background: bg, transform: dx ? `translateX(${dx}px)` : undefined } as Record<string, string>}
         onClick={open}
         onPointerDown={onPointerDown}

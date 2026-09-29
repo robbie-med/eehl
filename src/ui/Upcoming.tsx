@@ -30,7 +30,7 @@ export function Upcoming() {
         <Segmented
           value={range}
           ariaLabel={s.upcoming.title}
-          options={(['30', '90', '365'] as const).map((n) => ({ value: n, label: f.t(s.upcoming.range, { n }) }))}
+          options={(['30', '90', '365'] as const).map((n) => ({ value: n, label: f.units({ days: Number(n) }, ['days']) }))}
           onChange={setRange}
         />
       </div>

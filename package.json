@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "gen:lunar": "node scripts/gen-lunar.mjs",
     "gen:icons": "node scripts/gen-icons.mjs",
-    "android:assets": "npm run build -- --mode android && node scripts/copy-android-assets.mjs"
+    "build:android": "vite build --mode android",
+    "screens": "npm run build && node tests/screens.mjs screens"
   },
   "dependencies": {
     "@preact/signals": "^2.11.2",

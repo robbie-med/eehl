@@ -20,7 +20,7 @@ const server = createServer((req, res) => {
 }).listen(0);
 const port = server.address().port;
 
-const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH ?? '/opt/pw-browsers/chromium' });
+const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || (existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined) });
 const ctx = await browser.newContext({
   viewport: { width: 400, height: 860 },
   deviceScaleFactor: 2,
@@ -70,7 +70,7 @@ await page.evaluate(({ lang, theme }) => {
     { ...base, id: 'baby', title: lang === 'ko' ? '하린이' : 'Harin', emoji: '👶', color: 'amber', preset: 'baby', epochMs: day(2026, 7, 2), dayOne: true,
       readouts: [r('gestation'), r('dday'), r('units', ['weeks', 'days']), r('units', ['months', 'days'])],
       milestones: [{ id: 'b1', type: 'baby', notify: true }] },
-    { ...base, id: 'mom', title: lang === 'ko' ? '엄마 생신' : "Mom's birthday", emoji: '🎂', color: 'orange', preset: 'birthday', epochMs: day(1966, 4, 24), calendar: 'korean-lunar', lunar: { year: 1966, month: 3, day: 5, leap: false }, repeat: 'yearly', dayOne: false,
+    { ...base, id: 'mom', title: lang === 'ko' ? '엄마 생신' : "Mom's birthday", emoji: '🎂', color: 'orange', preset: 'birthday', epochMs: day(1966, 3, 26), calendar: 'korean-lunar', lunar: { year: 1966, month: 3, day: 5, leap: false }, repeat: 'yearly', dayOne: false,
       readouts: [r('dday'), r('age'), r('units', ['days'], 'origin')],
       milestones: [{ id: 'y', type: 'yearly', notify: true }, { id: 'l', type: 'long-life', tradition: 'ko', notify: true }] },
     { ...base, id: 'exam', title: lang === 'ko' ? '2027 수능' : 'CSAT 2027', emoji: '📝', color: 'sky', preset: 'exam', epochMs: day(2026, 11, 19), direction: 'down', endBehavior: 'archive', dayOne: false,
