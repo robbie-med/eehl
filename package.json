@@ -1,0 +1,29 @@
+{
+  "name": "eehl",
+  "version": "0.1.0",
+  "private": true,
+  "description": "eehl (일) — count-ups and countdowns with D-day, 100-day milestones and lunar dates. Offline, no Google.",
+  "license": "GPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && node scripts/build-sw.mjs",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "gen:lunar": "node scripts/gen-lunar.mjs",
+    "gen:icons": "node scripts/gen-icons.mjs",
+    "android:assets": "npm run build -- --mode android && node scripts/copy-android-assets.mjs"
+  },
+  "dependencies": {
+    "@preact/signals": "^2.11.2",
+    "preact": "^10.29.8"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  }
+}
