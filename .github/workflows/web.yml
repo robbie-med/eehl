@@ -36,7 +36,12 @@ jobs:
           path: dist
 
   # Publishes the PWA to GitHub Pages (eehl.robbiemed.org via public/CNAME).
-  # One-time setup: repo Settings → Pages → Source: "GitHub Actions".
+  #
+  # Recommended setup: repo Settings → Pages → Source: "GitHub Actions".
+  # If the source is still "Deploy from a branch", GitHub also publishes the
+  # raw repository on every push (a blank page, since the app needs a build).
+  # The first step waits for that branch deploy to finish so this one lands
+  # last, and the last step checks the live site actually serves the build.
   deploy:
     needs: test
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
@@ -44,9 +49,32 @@ jobs:
     permissions:
       pages: write
       id-token: write
+      actions: read
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Wait for GitHub's branch-based Pages build, if that mode is on
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for i in $(seq 1 60); do
+            pending=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${{ github.sha }}&per_page=50" \
+              --jq '[.workflow_runs[] | select(.name == "pages build and deployment" and .status != "completed")] | length')
+            echo "branch-based Pages builds still running: $pending"
+            [ "$pending" = "0" ] && exit 0
+            sleep 10
+          done
+          echo "::warning::GitHub's branch-based Pages build is still running after 10 minutes"
       - id: deployment
         uses: actions/deploy-pages@v4
+      - name: Check the live site serves the built app
+        run: |
+          url="${{ steps.deployment.outputs.page_url }}"
+          for i in $(seq 1 30); do
+            html=$(curl -fsSL -H 'Cache-Control: no-cache' "${url}?check=${{ github.sha }}-$i" || true)
+            if echo "$html" | grep -q 'assets/index-'; then echo "live site serves the build"; exit 0; fi
+            echo "not yet ($i)"; sleep 10
+          done
+          echo "::error::${url} does not serve the built app. Set Settings → Pages → Source to 'GitHub Actions'."
+          exit 1
