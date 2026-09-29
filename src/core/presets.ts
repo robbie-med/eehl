@@ -64,7 +64,7 @@ type PresetFields = Pick<
 >;
 
 /** Default fields for a preset. `tradition` picks long-life names (Korean or Japanese). */
-export function presetFields(id: PresetId, tradition: 'ko' | 'ja' = 'ko'): PresetFields {
+export function presetFields(id: PresetId, tradition: 'ko' | 'ja' = 'ko', lang = 'en'): PresetFields {
   const common: PresetFields = {
     repeat: 'none',
     direction: 'auto',
@@ -117,7 +117,7 @@ export function presetFields(id: PresetId, tradition: 'ko' | 'ja' = 'ko'): Prese
         ...common,
         repeat: 'yearly',
         readouts: [readout('dday'), readout('units', ['years', 'months', 'days'], 'origin'), readout('units', ['days'], 'origin')],
-        milestones: [rule({ type: 'wedding', notify: true }), rule({ type: 'round-days', notify: false })],
+        milestones: [rule({ type: 'wedding', names: 'auto', notify: true }), rule({ type: 'round-days', notify: false })],
         reminders: [reminder('event', 0), reminder('event', 14)],
       };
     case 'memorial':
@@ -143,7 +143,13 @@ export function presetFields(id: PresetId, tradition: 'ko' | 'ja' = 'ko'): Prese
         endBehavior: 'flip',
         dayOne: true,
         readouts: [readout('dday'), readout('percent'), readout('units', ['months', 'days'])],
-        milestones: [rule({ type: 'every-n-days', n: 100, limit: 20, notify: false })],
+        milestones: [
+          rule({ type: 'every-n-days', n: 100, limit: 20, notify: false }),
+          // Korean Army (18 months): 일병 after 2 months, 상병 after 8, 병장 after 14.
+          ...(lang === 'ko'
+            ? [rule({ type: 'span-months', steps: [{ months: 2, label: '일병' }, { months: 8, label: '상병' }, { months: 14, label: '병장' }], notify: true })]
+            : []),
+        ],
         reminders: [reminder('event', 30), reminder('event', 0)],
       };
   }
@@ -162,6 +168,8 @@ export interface NewEventInput {
   spanStart?: Civil | null;
   now: number;
   tradition?: 'ko' | 'ja';
+  /** UI language, for preset defaults that only make sense in one culture. */
+  lang?: string;
 }
 
 export function anchorInstant(date: Civil, time: { h: number; mi: number } | null, zone: string): number {
@@ -194,7 +202,8 @@ export function newEvent(input: NewEventInput): CountEvent {
     lunar: calendar === 'gregorian' ? null : (input.lunar ?? null),
     leapRule: input.leapRule ?? 'regular',
     displayZone: 'event',
-    ...presetFields(input.preset, input.tradition),
+    ...presetFields(input.preset, input.tradition, input.lang),
+    counter: input.preset === 'exam' ? { label: '', value: 0, step: 1, unit: 'hours' } : null,
     notes: '',
     listId: null,
     tags: [],

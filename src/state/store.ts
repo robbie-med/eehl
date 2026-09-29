@@ -3,28 +3,60 @@
 // the widget payload and hands them to the platform.
 
 import { computed, effect, signal } from '@preact/signals';
-import { emptyData, mergeData, normalizeData } from '../core/backup';
+import {
+  dataFromFile,
+  decryptWithKey,
+  deriveBackupKey,
+  emptyData,
+  encryptWithKey,
+  isEncrypted,
+  keyForFile,
+  mergeData,
+  normalizeData,
+  type BackupKey,
+} from '../core/backup';
 import { countState } from '../core/count';
 import { uid } from '../core/presets';
 import { buildSchedule, buildWidgetPayload, type ScheduledNotification } from '../core/schedule';
 import type { AppData, CountEvent, EventList, Settings } from '../core/types';
-import { Formatter, type Lang } from '../i18n/format';
+import { detectLang, Formatter, type Lang } from '../i18n/format';
 import { platform } from '../platform';
 
 const KEY = 'eehl:data:v1';
 
-function load(): AppData {
+// App lock: when on, the stored data is an encrypted backup file (same format
+// as "Export encrypted backup"), decrypted into memory at unlock. The key
+// and passphrase live only in memory for the session.
+let lockKey: BackupKey | null = null;
+let lockPass: string | null = null;
+export const locked = signal(false);
+
+function readStored(): unknown {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) return normalizeData(JSON.parse(raw));
+    return raw ? JSON.parse(raw) : null;
   } catch (e) {
-    console.error('eehl: could not load data', e);
+    console.error('eehl: could not read data', e);
     try {
       const raw = localStorage.getItem(KEY);
       if (raw) localStorage.setItem(`${KEY}:corrupt:${Date.now()}`, raw);
     } catch {
       /* ignore */
     }
+    return null;
+  }
+}
+
+function load(): AppData {
+  const raw = readStored();
+  if (isEncrypted(raw)) {
+    locked.value = true;
+    return emptyData();
+  }
+  try {
+    if (raw) return normalizeData(raw);
+  } catch (e) {
+    console.error('eehl: could not load data', e);
   }
   return emptyData();
 }
@@ -33,37 +65,103 @@ export const data = signal<AppData>(load());
 export const now = signal(Date.now());
 export const saveError = signal(false);
 
-let saveTimer: ReturnType<typeof setTimeout> | undefined;
-function persist(d: AppData) {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
+function write(d: AppData) {
+  // Never overwrite the encrypted store with the empty placeholder shown while locked.
+  if (locked.value) return;
+  const key = lockKey;
+  const store = (text: string) => {
     try {
-      localStorage.setItem(KEY, JSON.stringify(d));
+      localStorage.setItem(KEY, text);
       saveError.value = false;
     } catch {
       saveError.value = true;
     }
+  };
+  if (key) void encryptWithKey(d, key).then((file) => store(JSON.stringify(file)));
+  else store(JSON.stringify(d));
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+function persist(d: AppData) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    saveTimer = undefined;
+    write(d);
   }, 150);
 }
 
 export function flush() {
   if (saveTimer) {
     clearTimeout(saveTimer);
-    try {
-      localStorage.setItem(KEY, JSON.stringify(data.value));
-    } catch {
-      saveError.value = true;
-    }
+    saveTimer = undefined;
+    write(data.value);
   }
+}
+
+/** Unlock with the passphrase. Throws on a wrong passphrase. */
+export async function unlock(passphrase: string): Promise<void> {
+  const raw = readStored();
+  if (!isEncrypted(raw)) {
+    locked.value = false;
+    return;
+  }
+  const key = await keyForFile(passphrase, raw);
+  const plain = await decryptWithKey(raw, key);
+  lockKey = key;
+  lockPass = passphrase;
+  locked.value = false;
+  data.value = dataFromFile(plain);
+}
+
+export async function enableLock(passphrase: string, autoLockMinutes: number) {
+  lockKey = await deriveBackupKey(passphrase);
+  lockPass = passphrase;
+  updateSettings({ lock: { enabled: true, autoLockMinutes } });
+  flush();
+}
+
+export function disableLock() {
+  lockKey = null;
+  lockPass = null;
+  updateSettings({ lock: { ...settings.value.lock, enabled: false } });
+  flush();
+}
+
+export function lockNow() {
+  if (!lockKey) return;
+  flush();
+  lockKey = null;
+  lockPass = null;
+  locked.value = true;
+  data.value = emptyData();
+}
+
+/** The session passphrase, so sync can open encrypted files written by other devices. */
+export function sessionPassphrase(): string | null {
+  return lockPass;
+}
+
+export function sessionKey(): BackupKey | null {
+  return lockKey;
+}
+
+/** Forgotten passphrase: erase everything on this device. */
+export function resetAll() {
+  clearTimeout(saveTimer);
+  localStorage.removeItem(KEY);
+  lockKey = null;
+  lockPass = null;
+  locked.value = false;
+  data.value = emptyData();
 }
 
 export const settings = computed(() => data.value.settings);
 
 export const lang = computed<Lang>(() => {
   const l = settings.value.locale;
-  if (l === 'en' || l === 'ko') return l;
-  const nav = typeof navigator !== 'undefined' ? navigator.languages?.[0] ?? navigator.language : 'en';
-  return /^ko\b/i.test(nav ?? '') ? 'ko' : 'en';
+  if (l !== 'system') return l;
+  const tags = typeof navigator !== 'undefined' ? (navigator.languages?.length ? navigator.languages : [navigator.language]) : ['en'];
+  return detectLang(tags);
 });
 
 export const fmt = computed(
@@ -99,8 +197,42 @@ export function patchEvent(id: string, patch: Partial<CountEvent>) {
   if (ev) upsertEvent({ ...ev, ...patch });
 }
 
-export function deleteEvent(id: string) {
-  update((d) => ({ ...d, events: d.events.filter((e) => e.id !== id) }));
+/** Deletes and returns the event, so the caller can offer undo. */
+export function deleteEvent(id: string): CountEvent | null {
+  const ev = data.value.events.find((e) => e.id === id) ?? null;
+  update((d) => ({ ...d, events: d.events.filter((e) => e.id !== id), deleted: { ...d.deleted, [id]: Date.now() } }));
+  return ev;
+}
+
+export function restoreEvent(ev: CountEvent) {
+  update((d) => {
+    const deleted = { ...d.deleted };
+    delete deleted[ev.id];
+    return { ...d, deleted, events: d.events.some((e) => e.id === ev.id) ? d.events : [...d.events, { ...ev, editedAt: Date.now() }] };
+  });
+}
+
+/** Apply one change to many events at once (bulk edit). */
+export function patchEvents(ids: string[], patch: (e: CountEvent) => Partial<CountEvent>) {
+  const set = new Set(ids);
+  const t = Date.now();
+  update((d) => ({ ...d, events: d.events.map((e) => (set.has(e.id) ? { ...e, ...patch(e), editedAt: t } : e)) }));
+}
+
+export function deleteEvents(ids: string[]): CountEvent[] {
+  const set = new Set(ids);
+  const gone = data.value.events.filter((e) => set.has(e.id));
+  const t = Date.now();
+  update((d) => {
+    const deleted = { ...d.deleted };
+    for (const id of ids) deleted[id] = t;
+    return { ...d, events: d.events.filter((e) => !set.has(e.id)), deleted };
+  });
+  return gone;
+}
+
+export function restoreEvents(list: CountEvent[]) {
+  for (const ev of list) restoreEvent(ev);
 }
 
 export function duplicateEvent(id: string): string | null {
@@ -139,13 +271,32 @@ export function upsertList(list: EventList) {
 export function deleteList(id: string) {
   update((d) => ({
     ...d,
-    lists: d.lists.filter((l) => l.id !== id),
-    events: d.events.map((e) => (e.listId === id ? { ...e, listId: null } : e)),
+    lists: d.lists.filter((l) => l.id !== id).map((l) => (l.parentId === id ? { ...l, parentId: null } : l)),
+    events: d.events.map((e) => (e.listId === id ? { ...e, listId: null, editedAt: Date.now() } : e)),
+    deleted: { ...d.deleted, [id]: Date.now() },
   }));
 }
 
+/** Add events (from a file import or a shared QR link) without touching anything else. */
+export function addEvents(events: CountEvent[]) {
+  const t = Date.now();
+  update((d) => {
+    const ids = new Set(d.events.map((e) => e.id));
+    const fresh = events.map((e) => (ids.has(e.id) ? { ...e, id: uid() } : e)).map((e) => ({ ...e, createdAt: t, editedAt: t }));
+    const deleted = { ...d.deleted };
+    for (const e of fresh) delete deleted[e.id];
+    return { ...d, events: [...d.events, ...fresh], deleted };
+  });
+}
+
+/** Replace the whole data set (sync, unlock). */
+export function replaceData(next: AppData) {
+  data.value = next;
+  persist(next);
+}
+
 export function importData(incoming: AppData, mode: 'merge' | 'replace') {
-  update((d) => (mode === 'replace' ? { ...incoming, settings: { ...incoming.settings } } : mergeData(d, incoming)));
+  update((d) => (mode === 'replace' ? { ...incoming, settings: { ...incoming.settings } } : mergeData(d, incoming).data));
 }
 
 // ---------- clock ----------
@@ -250,13 +401,25 @@ export function start() {
     });
     window.addEventListener('pagehide', flush);
     window.addEventListener('storage', (e) => {
-      if (e.key === KEY && e.newValue) {
-        try {
-          data.value = normalizeData(JSON.parse(e.newValue));
-        } catch {
-          /* ignore */
-        }
+      // Another tab saved: follow it.
+      if (e.key !== KEY || !e.newValue || locked.value) return;
+      try {
+        const raw = JSON.parse(e.newValue);
+        if (!isEncrypted(raw)) data.value = normalizeData(raw);
+        else if (lockPass) void keyForFile(lockPass, raw).then((k) => decryptWithKey(raw, k)).then((p) => (data.value = dataFromFile(p)));
+      } catch {
+        /* ignore */
       }
+    });
+    // Auto-lock after the app has been in the background for a while.
+    let hiddenAt = 0;
+    document.addEventListener('visibilitychange', () => {
+      const lock = settings.value.lock;
+      if (!lock.enabled || !lockKey) return;
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+        if (lock.autoLockMinutes === 0) lockNow();
+      } else if (hiddenAt && Date.now() - hiddenAt >= lock.autoLockMinutes * 60_000) lockNow();
     });
   }
   platform.onRefresh(() => schedule());

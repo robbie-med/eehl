@@ -5,7 +5,7 @@ import { milestonesFor } from '../core/milestones';
 import { data, fmt, now, patchEvent, settings, t } from '../state/store';
 import { Icon, Section, Sheet } from './components';
 import { actionsFor, cycleReadout, EventActions, readoutIndex } from './Home';
-import { colorOf, mix, viewOf } from './present';
+import { colorOf, tintOf, viewOf } from './present';
 import { back, go } from './router';
 import { shareEvent } from './share';
 import { isDarkTheme } from './theme';
@@ -68,7 +68,7 @@ export function Detail(props: { id: string }) {
         </div>
       </header>
 
-      <div class="hero" style={{ background: dark ? mix(accent, '#101216', 0.22) : mix(accent, '#ffffff', 0.14) }}>
+      <div class="hero" style={{ background: tintOf(ev.color, dark, set.theme === 'black') }}>
         <div class="hero-emoji" aria-hidden="true">
           {ev.emoji}
         </div>
@@ -110,6 +110,23 @@ export function Detail(props: { id: string }) {
         </ul>
         <p class="field-hint">{s.actions.explain}</p>
       </Section>
+
+      {ev.counter && (
+        <Section title={ev.counter.label || s.counterUi.title}>
+          <div class="counter">
+            <button class="btn" aria-label={f.t(s.counterUi.subtract, { n: ev.counter.step })} onClick={() => patchEvent(ev.id, { counter: { ...ev.counter!, value: Math.max(0, ev.counter!.value - ev.counter!.step) } })}>
+              {f.t(s.counterUi.subtract, { n: ev.counter.step })}
+            </button>
+            <strong class="counter-value" aria-live="polite">
+              {f.num(ev.counter.value)}
+              {ev.counter.value % 1 ? String(ev.counter.value % 1).slice(1, 4) : ''} <small>{ev.counter.unit}</small>
+            </strong>
+            <button class="btn primary" aria-label={f.t(s.counterUi.add, { n: ev.counter.step })} onClick={() => patchEvent(ev.id, { counter: { ...ev.counter!, value: ev.counter!.value + ev.counter!.step } })}>
+              {f.t(s.counterUi.add, { n: ev.counter.step })}
+            </button>
+          </div>
+        </Section>
+      )}
 
       <Section title={s.milestones.next}>
         {upcoming.length === 0 ? (

@@ -33,7 +33,11 @@ export type ReadoutStyle =
   /** Percent of a span elapsed, with a progress bar. */
   | 'percent'
   /** Gestational age (weeks + days) counting to a due date. */
-  | 'gestation';
+  | 'gestation'
+  /** Working days (Mon–Fri minus the chosen public holidays). */
+  | 'business'
+  /** A manual tally kept on the event (study hours, sessions …). */
+  | 'counter';
 
 /**
  * 'target': the date being counted to or from right now (the next
@@ -64,12 +68,24 @@ export type MilestoneRule =
   | { id: string; type: 'monthly'; limit: number; notify: boolean }
   /** 환갑/還暦, 칠순/古稀 … derived from a birthday. */
   | { id: string; type: 'long-life'; tradition: 'ko' | 'ja'; notify: boolean }
-  /** Named wedding anniversaries (paper, wood, tin, silver, gold …). */
-  | { id: string; type: 'wedding'; notify: boolean }
+  /** Named wedding anniversaries (paper, wood, tin, silver, gold …), in the chosen language's list. */
+  | { id: string; type: 'wedding'; names?: WeddingNames; notify: boolean }
+  /** Steps counted in months from the span start (promotions during service, training stages). */
+  | { id: string; type: 'span-months'; steps: { months: number; label: string }[]; notify: boolean }
   /** A single custom day count ("day 1,000 of sobriety"). */
   | { id: string; type: 'custom-day'; day: number; label: string; notify: boolean };
 
 export type MilestoneType = MilestoneRule['type'];
+
+/** 'auto' follows the UI language. */
+export type WeddingNames = 'auto' | 'en' | 'ko' | 'ja' | 'zh';
+
+export interface Counter {
+  label: string;
+  value: number;
+  step: number;
+  unit: string;
+}
 
 export interface Reminder {
   id: string;
@@ -115,6 +131,8 @@ export interface CountEvent {
   readouts: Readout[];
   milestones: MilestoneRule[];
   reminders: Reminder[];
+  /** Optional manual tally, e.g. study hours for an exam. */
+  counter: Counter | null;
 
   notes: string;
   listId: string | null;
@@ -132,15 +150,25 @@ export interface EventList {
   name: string;
   color: string;
   collapsed: boolean;
+  /** One level of nesting: a list can sit inside another. */
+  parentId: string | null;
+  /** Readout added to new events created in this list. */
+  defaultReadout: { style: ReadoutStyle; units: Unit[] } | null;
+  /** Time zone for new events created in this list. */
+  defaultZone: string | null;
+  /** Sort inside this list ('inherit' = the global setting). */
+  sort: SortOrder | 'inherit';
 }
 
-export type DateFormat = 'locale' | 'DDMMMYYYY' | 'ISO' | 'YMD';
+export type DateFormat = 'locale' | 'DDMMMYYYY' | 'ISO' | 'YMD' | 'JP-ERA';
+export type UiLang = 'en' | 'ko' | 'ja' | 'zh-Hans' | 'zh-Hant';
+export type HolidaySet = 'KR' | 'JP' | 'CN' | 'TW' | 'HK' | 'US';
 export type ThemeMode = 'system' | 'light' | 'dark' | 'black';
 export type CardMode = 'full' | 'compact' | 'grid';
 export type SortOrder = 'manual' | 'soonest' | 'date' | 'title';
 
 export interface Settings {
-  locale: 'system' | 'en' | 'ko';
+  locale: 'system' | UiLang;
   theme: ThemeMode;
   dateFormat: DateFormat;
   /** Show 세는 나이 / 数え年 next to international age. */
@@ -149,8 +177,8 @@ export interface Settings {
   leapRule: LeapRule;
   /** Group large numbers by 만 (1만 2,345). */
   manGrouping: boolean;
-  /** 'latin' D-Day, 'hangul' 디데이 on the day itself. */
-  ddayScript: 'latin' | 'hangul';
+  /** 'latin' D-12 / D-Day, 'hangul' 디데이 on the day, 'hanzi' 还有12天 / 就是今天 / 已经12天. */
+  ddayScript: 'latin' | 'hangul' | 'hanzi';
   cardMode: CardMode;
   sort: SortOrder;
   showDates: boolean;
@@ -162,6 +190,15 @@ export interface Settings {
   defaultZone: string | null;
   /** Default reminder applied to new events. */
   defaultReminder: { enabled: boolean; daysBefore: number; time: string };
+  /** Public holidays for business-day counts and the Upcoming view. */
+  holidays: HolidaySet | null;
+  showHolidays: boolean;
+  /** 24 solar terms (절기 / 节气) in the Upcoming view. */
+  showSolarTerms: boolean;
+  /** Life view: weeks-of-life grid from a birth date. */
+  life: { birthEventId: string | null; birthDate: string | null; years: number };
+  /** Lock the app with a passphrase; data is encrypted at rest. */
+  lock: { enabled: boolean; autoLockMinutes: number };
 }
 
 export interface AppData {
@@ -169,4 +206,6 @@ export interface AppData {
   events: CountEvent[];
   lists: EventList[];
   settings: Settings;
+  /** Deleted event and list ids → deletion time, so a deletion survives a sync merge. */
+  deleted: Record<string, number>;
 }

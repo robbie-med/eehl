@@ -7,7 +7,9 @@ export type Route =
   | { name: 'edit'; id: string }
   | { name: 'upcoming' }
   | { name: 'settings' }
-  | { name: 'archive' };
+  | { name: 'archive' }
+  | { name: 'life' }
+  | { name: 'import'; code: string };
 
 function parse(hash: string): Route {
   const parts = hash.replace(/^#\/?/, '').split('/').filter(Boolean).map(decodeURIComponent);
@@ -24,6 +26,10 @@ function parse(hash: string): Route {
       return { name: 'settings' };
     case 'archive':
       return { name: 'archive' };
+    case 'life':
+      return { name: 'life' };
+    case 'import':
+      return parts[1] ? { name: 'import', code: parts[1] } : { name: 'home' };
     default:
       return { name: 'home' };
   }

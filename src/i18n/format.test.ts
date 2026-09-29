@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { Formatter } from './format';
+import { Formatter, STRINGS } from './format';
 import { en } from './en';
-import { ko } from './ko';
 
 const ko1 = new Formatter({ lang: 'ko', dateFormat: 'locale', manGrouping: true, ddayScript: 'hangul' });
 const en1 = new Formatter({ lang: 'en', dateFormat: 'DDMMMYYYY', manGrouping: false, ddayScript: 'latin' });
@@ -31,8 +30,10 @@ describe('format', () => {
     expect(ko1.date({ y: 2026, m: 9, d: 28 }, true)).toBe('2026년 9월 28일 (월)');
     expect(ko1.lunar({ year: 2017, month: 5, day: 3, leap: true }, 'korean-lunar')).toBe('음력 윤5월 3일');
   });
-  it('has every Korean string', () => {
-    expect(keys(ko).sort()).toEqual(keys(en).filter((k) => !/weddingNames\.\d+$/.test(k)).concat(keys(ko).filter((k) => /weddingNames\.\d+$/.test(k))).sort());
+  it('has every string in every language', () => {
+    // bigNumbers is null in English and an object elsewhere: compare it as one key.
+    const norm = (o: unknown) => keys(o).map((k) => k.replace(/^\.format\.bigNumbers\..*$/, '.format.bigNumbers')).filter((k, i, all) => all.indexOf(k) === i).sort();
+    for (const [lang, strings] of Object.entries(STRINGS)) expect(norm(strings), lang).toEqual(norm(en));
   });
 });
 

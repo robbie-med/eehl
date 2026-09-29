@@ -34,9 +34,24 @@ describe('backup', () => {
     a.events = [{ ...e, editedAt: 1 }];
     const b = emptyData();
     b.events = [{ ...e, title: 'new', editedAt: 2 }, ev('2027-01-01')];
-    const m = mergeData(a, b);
+    const m = mergeData(a, b).data;
     expect(m.events).toHaveLength(2);
     expect(m.events.find((x) => x.id === e.id)!.title).toBe('new');
+  });
+  it('lets a later deletion win and reports conflicts since the last sync', () => {
+    const e = ev('2026-01-01', { title: 'x' });
+    const a = { ...emptyData(), events: [{ ...e, editedAt: 10 }] };
+    const b = { ...emptyData(), events: [], deleted: { [e.id]: 20 } };
+    expect(mergeData(a, b).data.events).toHaveLength(0);
+    // An edit made after the deletion brings it back.
+    const c = { ...emptyData(), events: [{ ...e, editedAt: 30 }] };
+    expect(mergeData(b, c).data.events).toHaveLength(1);
+    // Both sides edited after the last sync (5): conflict, the later edit wins.
+    const mine = { ...emptyData(), events: [{ ...e, title: 'mine', editedAt: 40 }] };
+    const theirs = { ...emptyData(), events: [{ ...e, title: 'theirs', editedAt: 50 }] };
+    const r = mergeData(mine, theirs, 5, 100);
+    expect(r.data.events[0].title).toBe('theirs');
+    expect(r.conflicts).toEqual([{ id: e.id, title: 'theirs', kept: 'theirs', other: mine.events[0], at: 100 }]);
   });
   it('exports ICS and CSV', () => {
     const data = emptyData();

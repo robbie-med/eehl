@@ -3,23 +3,42 @@
 // can use it too.
 
 import type { Civil } from '../core/civil';
+import { ERA_NAMES, japaneseEra } from '../core/era';
 import { weekday } from '../core/civil';
 import type { LunarCalendar, LunarDate } from '../core/lunar';
 import type { MilestoneLabel } from '../core/milestones';
-import type { DateFormat, Unit } from '../core/types';
+import type { DateFormat, Settings, UiLang, Unit } from '../core/types';
 import { UNITS } from '../core/types';
 import { en, type Strings } from './en';
+import { weddingName } from './wedding-names';
+import { ja } from './ja';
 import { ko } from './ko';
+import { zhHans } from './zh-Hans';
+import { zhHant } from './zh-Hant';
 
-export type Lang = 'en' | 'ko';
+export type Lang = UiLang;
 
-export const STRINGS: Record<Lang, Strings> = { en, ko };
+export const STRINGS: Record<Lang, Strings> = { en, ko, ja, 'zh-Hans': zhHans, 'zh-Hant': zhHant };
+
+export const LANG_NAMES: Record<Lang, string> = { en: 'English', ko: '한국어', ja: '日本語', 'zh-Hans': '简体中文', 'zh-Hant': '繁體中文' };
+
+/** Pick a UI language from browser language tags. */
+export function detectLang(tags: readonly string[]): Lang {
+  for (const raw of tags) {
+    const tag = raw.toLowerCase();
+    if (tag.startsWith('ko')) return 'ko';
+    if (tag.startsWith('ja')) return 'ja';
+    if (tag.startsWith('zh')) return /hant|tw|hk|mo/.test(tag) ? 'zh-Hant' : 'zh-Hans';
+    if (tag.startsWith('en')) return 'en';
+  }
+  return 'en';
+}
 
 export interface FormatOptions {
   lang: Lang;
   dateFormat: DateFormat;
   manGrouping: boolean;
-  ddayScript: 'latin' | 'hangul';
+  ddayScript: Settings['ddayScript'];
 }
 
 const MONTHS_EN = ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'];
@@ -45,10 +64,10 @@ export class Formatter {
 
   constructor(readonly opts: FormatOptions) {
     this.s = STRINGS[opts.lang];
-    this.locale = opts.lang === 'ko' ? 'ko-KR' : 'en-US';
+    this.locale = this.s.format.locale;
     this.nf = new Intl.NumberFormat(this.locale);
     this.pf = new Intl.NumberFormat(this.locale, { style: 'percent', minimumFractionDigits: 1, maximumFractionDigits: 1 });
-    this.df = new Intl.DateTimeFormat(this.locale, { year: 'numeric', month: opts.lang === 'ko' ? 'long' : 'short', day: 'numeric', timeZone: 'UTC' });
+    this.df = new Intl.DateTimeFormat(this.locale, { year: 'numeric', month: opts.lang === 'en' ? 'short' : 'long', day: 'numeric', timeZone: 'UTC' });
     this.wf = new Intl.DateTimeFormat(this.locale, { weekday: 'short', timeZone: 'UTC' });
     this.tf = new Intl.DateTimeFormat(this.locale, { hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
   }
@@ -61,19 +80,20 @@ export class Formatter {
     return fill(template, params);
   }
 
-  /** Integer with locale grouping, or 만/억 grouping when enabled. */
+  /** Integer with locale grouping, or East Asian 만/万/萬 + 억/億/亿 grouping when enabled. */
   num(n: number): string {
     const neg = n < 0;
     const a = Math.abs(Math.trunc(n));
     if (!this.opts.manGrouping || a < 10000) return (neg ? '-' : '') + this.nf.format(a);
+    const g = this.s.format.bigNumbers ?? STRINGS.ko.format.bigNumbers!;
     const eok = Math.floor(a / 1e8);
     const man = Math.floor((a % 1e8) / 1e4);
     const rest = a % 1e4;
     const parts: string[] = [];
-    if (eok) parts.push(`${this.nf.format(eok)}억`);
-    if (man) parts.push(`${this.nf.format(man)}만`);
+    if (eok) parts.push(`${this.nf.format(eok)}${g.eok}`);
+    if (man) parts.push(`${this.nf.format(man)}${g.man}`);
     if (rest) parts.push(this.nf.format(rest));
-    return (neg ? '-' : '') + parts.join(' ');
+    return (neg ? '-' : '') + parts.join(g.sep);
   }
 
   percent(fraction: number): string {
@@ -99,18 +119,25 @@ export class Formatter {
       case 'YMD':
         s = `${c.y}.${p2(c.m)}.${p2(c.d)}`;
         break;
+      case 'JP-ERA': {
+        const e = japaneseEra(c);
+        s = e ? `${ERA_NAMES[e.era].ja}${e.year === 1 ? '元' : e.year}年${c.m}月${c.d}日` : this.df.format(this.utc(c));
+        break;
+      }
       default:
         s = this.df.format(this.utc(c));
     }
-    if (withWeekday) {
-      const wd = this.wf.format(this.utc({ ...c, d: c.d }));
-      s = this.opts.lang === 'ko' ? `${s} (${wd})` : `${wd}, ${s}`;
-    }
+    if (withWeekday) s = fill(this.s.format.withWeekday, { date: s, wd: this.weekday(c) });
     return s;
   }
 
   weekday(c: Civil): string {
-    return this.wf.format(this.utc(c)) + (weekday(c) < 0 ? '' : '');
+    return this.wf.format(this.utc(c));
+  }
+
+  /** Weekday index helper (0 = Sunday) for callers that only have a formatter. */
+  weekdayIndex(c: Civil): number {
+    return weekday(c);
   }
 
   time(h: number, mi: number): string {
@@ -133,26 +160,38 @@ export class Formatter {
     return used.slice(i);
   }
 
-  /** "3 years 2 months 5 days" / "3년 2개월 5일". Compact: "3y 2mo 5d". */
+  private get cjk(): boolean {
+    return this.s.format.unitStyle === 'cjk';
+  }
+
+  /** "3 years 2 months 5 days" / "3년 2개월 5일" / "3年2か月5日". Compact: "3y 2mo 5d". */
   units(values: Partial<Record<Unit, number>>, units: Unit[], compact = false): string {
     const parts = this.shownUnits(values, units).map((u) => {
       const n = values[u] ?? 0;
-      if (this.opts.lang === 'ko') return `${this.num(n)}${this.s.unitsShort[u]}`;
+      if (this.cjk) return `${this.num(n)}${this.s.unitsShort[u]}`;
       return compact ? `${this.num(n)}${this.s.unitsShort[u]}` : `${this.num(n)} ${this.unitName(u, n)}`;
     });
-    return parts.join(' ');
+    return parts.join(this.s.format.unitJoin);
   }
 
   /** Splits "1,234 days" into number and unit parts for big display. */
   unitParts(values: Partial<Record<Unit, number>>, units: Unit[]): { n: string; u: string }[] {
     return this.shownUnits(values, units).map((u) => {
       const n = values[u] ?? 0;
-      return { n: this.num(n), u: this.opts.lang === 'ko' ? this.s.unitsShort[u] : this.unitName(u, n) };
+      return { n: this.num(n), u: this.cjk ? this.s.unitsShort[u] : this.unitName(u, n) };
     });
   }
 
-  /** D-12, D-Day (디데이), D+12. */
+  /**
+   * D-12, D-Day, D+12. 'hangul' writes the day itself as 디데이; 'hanzi' uses
+   * the 倒数日 style: 还有12天 / 就是今天 / 已经12天 (traditional forms in zh-Hant).
+   */
   dday(n: number): string {
+    if (this.opts.ddayScript === 'hanzi') {
+      const hant = this.opts.lang === 'zh-Hant';
+      if (n === 0) return '就是今天';
+      return n < 0 ? `${hant ? '還有' : '还有'}${this.num(-n)}天` : `${hant ? '已經' : '已经'}${this.num(n)}天`;
+    }
     if (n === 0) return this.opts.ddayScript === 'hangul' ? '디데이' : 'D-Day';
     return n < 0 ? `D-${this.num(-n)}` : `D+${this.num(n)}`;
   }
@@ -194,11 +233,13 @@ export class Formatter {
       case 'long-life':
         return fill(m.longLife, { name: m.longLifeNames[label.key] ?? label.key, c: label.countingAge, a: label.countingAge - 1 });
       case 'wedding': {
-        const name = m.weddingNames[label.n];
+        const name = weddingName(label.names, this.opts.lang, label.n);
         return fill(name ? m.wedding : m.weddingPlain, { n: label.n, ord: this.ordinal(label.n), name: name ?? '' });
       }
       case 'custom':
         return label.label.trim() || fill(m.day, { n: this.num(label.n) });
+      case 'step':
+        return label.label.trim() || fill(m.month, { n: label.months });
     }
   }
 }

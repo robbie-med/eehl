@@ -2,8 +2,9 @@
 
 import { addMonths, addYears, dayNumber, fromDayNumber, type Civil } from './civil';
 import { occurrence } from './count';
+import { wallAt } from './zone';
 import type { LunarDate } from './lunar';
-import type { CountEvent, MilestoneRule, PresetId } from './types';
+import type { CountEvent, MilestoneRule, PresetId, WeddingNames } from './types';
 
 export type BabyKey = 'one-month' | 'day-50' | 'day-100' | 'first-birthday' | 'second-birthday';
 
@@ -14,7 +15,8 @@ export type MilestoneLabel =
   | { kind: 'month'; n: number }
   | { kind: 'baby'; key: BabyKey }
   | { kind: 'long-life'; key: string; tradition: 'ko' | 'ja'; countingAge: number }
-  | { kind: 'wedding'; n: number }
+  | { kind: 'wedding'; n: number; names: WeddingNames }
+  | { kind: 'step'; months: number; label: string }
   | { kind: 'custom'; label: string; n: number };
 
 export interface Milestone {
@@ -112,8 +114,16 @@ function* ruleMilestones(
       yield* yearly((n) => ({ kind: 'year', n, preset: ev.preset }));
       break;
     case 'wedding':
-      yield* yearly((n) => ({ kind: 'wedding', n }));
+      yield* yearly((n) => ({ kind: 'wedding', n, names: rule.names ?? 'auto' }));
       break;
+    case 'span-months': {
+      // Counted from the span start (e.g. enlistment), falling back to the event date.
+      const start = ev.spanStartMs !== null ? wallAt(ev.spanStartMs, ev.zone) : origin;
+      for (const step of rule.steps) {
+        if (step.months > 0) yield { key: `step:${step.months}`, day: dayNumber(addMonths(start, step.months)), label: { kind: 'step', months: step.months, label: step.label } };
+      }
+      break;
+    }
     case 'monthly':
       for (let k = 1; k <= Math.min(rule.limit, 1200); k++) {
         yield { key: `month:${k}`, day: dayNumber(addMonths(origin, k)), label: { kind: 'month', n: k } };

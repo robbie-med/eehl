@@ -8,15 +8,17 @@ import {
   toCSV,
   toICS,
 } from '../core/backup';
-import { uid } from '../core/presets';
-import type { Settings as S } from '../core/types';
-import { deviceZone, knownZones } from '../core/zone';
-import { Formatter } from '../i18n/format';
+import { parseCSV, parseICS, parseVCF, type ImportResult } from '../core/importers';
+import type { HolidaySet, Settings as S } from '../core/types';
+import { deviceZone, wallAt } from '../core/zone';
+import { Formatter, LANG_NAMES, type Lang } from '../i18n/format';
 import { platform, type PlatformInfo } from '../platform';
-import { data, deleteList, fmt, importData, scheduled, settings, t, updateSettings, upsertList } from '../state/store';
+import { backupNow, backupState, chooseFolder, folderSupported, setMode } from '../platform/backups';
+import { addEvents, data, fmt, importData, scheduled, settings, t, updateSettings, upsertList } from '../state/store';
 import { chooseDialog, confirmDialog, Field, Icon, promptDialog, Section, Select, showToast, Toggle } from './components';
-import { colorOf, PALETTE } from './present';
-import { isDarkTheme } from './theme';
+import { ListsSection, newList } from './Lists';
+import { LockSection } from './Lock';
+import { ZonePicker } from './pickers';
 
 declare const __APP_VERSION__: string;
 
@@ -102,14 +104,44 @@ export function Settings() {
     }
   };
 
+  const importFile = async (kind: 'ics' | 'csv' | 'vcf') => {
+    const accept = { ics: 'text/calendar,.ics', csv: 'text/csv,.csv,.tsv,.txt', vcf: 'text/vcard,text/x-vcard,.vcf' }[kind];
+    const file = await platform.openFile(accept);
+    if (!file) return;
+    const zone = set.defaultZone ?? deviceZone();
+    let r: ImportResult;
+    try {
+      r = kind === 'ics' ? parseICS(file.text, zone) : kind === 'csv' ? parseCSV(file.text, zone) : parseVCF(file.text, zone);
+    } catch (e) {
+      showToast(f.t(st.importFailed, { error: e instanceof Error ? e.message : String(e) }));
+      return;
+    }
+    if (!r.events.length) {
+      showToast(s.imports.none);
+      return;
+    }
+    const preview = r.events.slice(0, 6).map((e) => `${e.emoji} ${e.title}`).join('\n') + (r.events.length > 6 ? '\n…' : '');
+    const note = r.noYear ? `\n\n${s.imports.noYear} (${r.noYear})` : '';
+    if (!(await confirmDialog(`${f.t(s.imports.preview, { n: r.events.length })}\n\n${preview}${note}`, s.common.add))) return;
+    // Lists named in a CSV are matched by name, or created.
+    const byName = new Map(data.value.lists.map((l) => [l.name, l.id]));
+    for (const name of new Set(Object.values(r.listNames))) {
+      if (!byName.has(name)) {
+        const l = newList(name);
+        upsertList(l);
+        byName.set(name, l.id);
+      }
+    }
+    addEvents(r.events.map((e) => ({ ...e, listId: r.listNames[e.id] ? (byName.get(r.listNames[e.id]) ?? null) : null })));
+    showToast(f.t(s.imports.added, { n: r.events.length }));
+  };
+
   const notifLabel = {
     granted: st.notifGranted,
     denied: st.notifDenied,
     default: st.notifDefault,
     unsupported: st.notifUnsupported,
   }[info.notifications];
-
-  const dark = isDarkTheme();
 
   return (
     <div class="page settings">
@@ -121,11 +153,7 @@ export function Settings() {
         <Field label={st.language}>
           <Select
             value={set.locale}
-            options={[
-              { value: 'system', label: st.system },
-              { value: 'en', label: 'English' },
-              { value: 'ko', label: '한국어' },
-            ]}
+            options={[{ value: 'system', label: st.system }, ...(Object.keys(LANG_NAMES) as Lang[]).map((l) => ({ value: l, label: LANG_NAMES[l] }))]}
             onChange={(v) => up({ locale: v })}
           />
         </Field>
@@ -135,7 +163,7 @@ export function Settings() {
         <Field label={st.dateFormat}>
           <Select
             value={set.dateFormat}
-            options={(['locale', 'DDMMMYYYY', 'ISO', 'YMD'] as const).map((x) => ({ value: x, label: `${st.dateFormats[x]} — ${new Formatter({ ...f.opts, dateFormat: x }).date({ y: 2026, m: 9, d: 28 })}` }))}
+            options={(['locale', 'DDMMMYYYY', 'ISO', 'YMD', 'JP-ERA'] as const).map((x) => ({ value: x, label: `${st.dateFormats[x]} — ${new Formatter({ ...f.opts, dateFormat: x }).date({ y: 2026, m: 9, d: 28 })}` }))}
             onChange={(v) => up({ dateFormat: v })}
           />
         </Field>
@@ -173,23 +201,33 @@ export function Settings() {
             options={[
               { value: 'latin', label: st.ddayLatin },
               { value: 'hangul', label: st.ddayHangul },
+              { value: 'hanzi', label: st.ddayHanzi },
             ]}
             onChange={(v) => up({ ddayScript: v })}
           />
         </Field>
       </Section>
 
-      <Section title={st.defaults}>
-        <Field label={st.defaultZone}>
-          <select class="input" value={set.defaultZone ?? ''} onChange={(e) => up({ defaultZone: (e.target as HTMLSelectElement).value || null })}>
-            <option value="">{f.t(st.deviceZone, { zone: deviceZone() })}</option>
-            {knownZones().map((z) => (
-              <option key={z} value={z}>
-                {z.replace(/_/g, ' ')}
-              </option>
-            ))}
-          </select>
+      <Section title={s.settingsExtra.calendarOverlays}>
+        <Field label={s.settingsExtra.holidays} hint={s.settingsExtra.holidaysHint}>
+          <Select
+            value={set.holidays ?? ''}
+            options={[
+              { value: '', label: s.settingsExtra.holidaysNone },
+              ...(['KR', 'JP', 'CN', 'TW', 'HK', 'US'] as HolidaySet[]).map((c) => ({ value: c, label: s.settingsExtra.countries[c] })),
+            ]}
+            onChange={(v) => up({ holidays: (v || null) as HolidaySet | null })}
+          />
         </Field>
+        {set.holidays && <Toggle label={s.settingsExtra.showHolidays} checked={set.showHolidays} onChange={(v) => up({ showHolidays: v })} />}
+        <Toggle label={s.settingsExtra.showSolarTerms} checked={set.showSolarTerms} onChange={(v) => up({ showSolarTerms: v })} />
+      </Section>
+
+      <Section title={st.defaults}>
+        <div class="field">
+          <span class="field-label">{st.defaultZone}</span>
+          <ZonePicker value={set.defaultZone ?? ''} allowEmpty={f.t(st.deviceZone, { zone: deviceZone() })} onChange={(z) => up({ defaultZone: z || null })} />
+        </div>
       </Section>
 
       <Section title={st.notifications}>
@@ -232,56 +270,7 @@ export function Settings() {
         {info.kind === 'web' && <p class="field-hint">{st.webNotifNote}</p>}
       </Section>
 
-      <Section
-        title={st.lists}
-        right={
-          <button
-            class="btn ghost small"
-            onClick={async () => {
-              const name = await promptDialog(st.listName, s.common.add);
-              if (name?.trim()) upsertList({ id: uid(), name: name.trim(), color: 'slate', collapsed: false });
-            }}
-          >
-            <Icon name="plus" size={16} /> {st.newList}
-          </button>
-        }
-      >
-        {data.value.lists.map((l) => (
-          <div class="list-row" key={l.id}>
-            <select
-              class="color-select"
-              aria-label={s.editor.color}
-              value={l.color}
-              style={{ background: colorOf(l.color, dark) }}
-              onChange={(e) => upsertList({ ...l, color: (e.target as HTMLSelectElement).value })}
-            >
-              {Object.keys(PALETTE).map((c) => (
-                <option key={c} value={c}>
-                  {s.colors[c]}
-                </option>
-              ))}
-            </select>
-            <button
-              class="list-name"
-              onClick={async () => {
-                const name = await promptDialog(st.listName, s.common.save, l.name);
-                if (name?.trim()) upsertList({ ...l, name: name.trim() });
-              }}
-            >
-              {l.name} <span class="muted">({data.value.events.filter((e) => e.listId === l.id).length})</span>
-            </button>
-            <button
-              class="icon-btn small"
-              aria-label={s.common.delete}
-              onClick={async () => {
-                if (await confirmDialog(st.deleteList, s.common.delete, true)) deleteList(l.id);
-              }}
-            >
-              <Icon name="trash" size={18} />
-            </button>
-          </div>
-        ))}
-      </Section>
+      <ListsSection />
 
       <Section title={st.data}>
         <div class="button-stack">
@@ -292,9 +281,6 @@ export function Settings() {
             {st.exportEncrypted}
           </button>
           <p class="field-hint">{st.passphraseHint}</p>
-          <button class="btn" onClick={importJson}>
-            {st.importJson}
-          </button>
           <button
             class="btn"
             onClick={async () => {
@@ -319,6 +305,27 @@ export function Settings() {
           </div>
         )}
       </Section>
+
+      <Section title={st.importJson}>
+        <div class="button-stack">
+          <button class="btn" onClick={importJson}>
+            {st.importJson} (.json)
+          </button>
+          <button class="btn" onClick={() => importFile('ics')}>
+            {s.imports.ics}
+          </button>
+          <button class="btn" onClick={() => importFile('csv')}>
+            {s.imports.csv}
+          </button>
+          <button class="btn" onClick={() => importFile('vcf')}>
+            {s.imports.vcf}
+          </button>
+        </div>
+      </Section>
+
+      <BackupSection />
+
+      <LockSection />
 
       {info.kind === 'web' && canInstall && (
         <Section title={st.install}>
@@ -354,5 +361,51 @@ export function Settings() {
         </p>
       </Section>
     </div>
+  );
+}
+
+function BackupSection() {
+  const s = t.value;
+  const b = s.backups;
+  const f = fmt.value;
+  const st = backupState.value;
+  const when = (ms: number) => {
+    const w = wallAt(ms, deviceZone());
+    return `${f.date(w)} ${f.time(w.h, w.mi)}`;
+  };
+  return (
+    <Section title={b.title}>
+      <p class="field-hint">{b.hint}</p>
+      <Select
+        value={st.mode}
+        ariaLabel={b.title}
+        options={[
+          { value: 'off', label: b.off },
+          ...(folderSupported ? [{ value: 'folder' as const, label: b.folder }] : []),
+          { value: 'reminder', label: b.reminder },
+        ]}
+        onChange={async (v) => {
+          if (v === 'folder') await chooseFolder();
+          else setMode(v);
+        }}
+      />
+      {st.mode === 'folder' && (
+        <>
+          <p class="field-hint">{b.folderHint}</p>
+          {st.folderName && <p>{f.t(b.folderName, { name: st.folderName })}</p>}
+          <button class="btn" onClick={() => chooseFolder()}>
+            {b.chooseFolder}
+          </button>
+        </>
+      )}
+      {st.mode === 'reminder' && <p class="field-hint">{b.reminderHint}</p>}
+      <div class="kv">
+        <span>{st.lastBackup ? f.t(b.last, { time: when(st.lastBackup) }) : b.never}</span>
+        <button class="link" onClick={() => backupNow()}>
+          {b.now}
+        </button>
+      </div>
+      {st.lastError && <p class="error">{f.t(b.failed, { error: st.lastError })}</p>}
+    </Section>
   );
 }

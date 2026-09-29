@@ -21,10 +21,31 @@ export const PALETTE: Record<string, { light: string; dark: string }> = {
   slate: { light: '#475569', dark: '#94a3b8' },
 };
 
-export function colorOf(name: string, dark: boolean): string {
-  if (/^#[0-9a-f]{6}$/i.test(name)) return name;
+/** A color value is a palette name, "#rrggbb", or "grad:<first>,<second>" (either part a name or hex). */
+export function parseColor(value: string): { a: string; b: string | null } {
+  if (value.startsWith('grad:')) {
+    const [a, b] = value.slice(5).split(',');
+    return { a: a || 'blue', b: b || null };
+  }
+  return { a: value, b: null };
+}
+
+/** The accent (first) color of a color value, adjusted for the theme. */
+export function colorOf(value: string, dark: boolean): string {
+  const name = parseColor(value).a;
+  if (/^#[0-9a-f]{6}$/i.test(name)) return name.toLowerCase();
   const p = PALETTE[name] ?? PALETTE.blue;
   return dark ? p.dark : p.light;
+}
+
+/** Soft card background: a tint of the color, or of both colors for a gradient. */
+export function tintOf(value: string, dark: boolean, black: boolean): string {
+  const { a, b } = parseColor(value);
+  const base = dark ? (black ? '#000000' : '#16181d') : '#ffffff';
+  const amount = dark ? 0.16 : 0.1;
+  const first = mix(colorOf(a, dark), base, amount);
+  if (!b) return first;
+  return `linear-gradient(135deg, ${first}, ${mix(colorOf(b, dark), base, amount * 1.6)})`;
 }
 
 function hexToRgb(hex: string): [number, number, number] {
@@ -61,6 +82,8 @@ export function applicable(ev: CountEvent, st: CountState, r: Readout): boolean 
       return st.mode === 'down' && st.dday >= -280 && ev.repeat === 'none';
     case 'age':
       return st.todayDay >= st.origin.day;
+    case 'counter':
+      return !!ev.counter;
     case 'percent':
       return true;
     default:
@@ -117,6 +140,19 @@ export function show(ev: CountEvent, st: CountState, rv: ReadoutValue, f: Format
       const sub = `${f.t(s.count.daysServed, { n: f.units({ days: p.elapsedDays }, ['days']) })} · ${f.t(s.count.daysLeft, { n: f.units({ days: p.remainingDays }, ['days']) })}`;
       return { main, sub, label: s.count.percentLabel, progress: p.fraction, aria: `${title}: ${main}, ${sub}` };
     }
+    case 'business': {
+      const b = rv.business!;
+      const main = f.t(s.count.business, { n: f.num(b.days) });
+      const country = b.holidays ? s.settingsExtra.countries[b.holidays] : '';
+      const sub = `${f.t(s.count.businessSub, { holidays: country ? f.t(s.count.businessHolidays, { country }) : '' })} · ${rv.direction === 'until' ? s.count.left : s.count.since}`;
+      return { main, sub, label: s.count.businessLabel, aria: `${title}: ${main}, ${sub}` };
+    }
+    case 'counter': {
+      const c = rv.counter!;
+      const main = `${f.num(c.value)}${c.unit ? (f.lang === 'en' ? ' ' : '') + c.unit : ''}`;
+      const label = c.label || s.counterUi.title;
+      return { main, sub: label, label, aria: `${title}: ${label} ${main}` };
+    }
     case 'gestation': {
       const g = rv.gestation!;
       const main = f.t(s.count.gestation, { w: g.weeks, d: g.days });
@@ -138,7 +174,7 @@ export function viewOf(ev: CountEvent, now: number, f: Formatter, settings: Sett
   const st = countState(ev, now);
   if (!st) return null;
   const readouts = visibleReadouts(ev, st).map((r) => {
-    const rv = readoutValue(ev, st, r);
+    const rv = readoutValue(ev, st, r, { holidays: settings.holidays });
     return { r, rv, shown: show(ev, st, rv, f, settings) };
   });
   return { ev, st, readouts, dateLine: dateLine(ev, st, f), next: withNext ? (nextMilestones(ev, st.todayDay, 1)[0] ?? null) : null };

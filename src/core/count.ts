@@ -12,7 +12,8 @@ import {
   type LunarCalendar,
   type LunarDate,
 } from './lunar';
-import type { CountEvent, Readout, Unit } from './types';
+import { businessDaysBetween } from './holidays';
+import type { Counter, CountEvent, HolidaySet, Readout, Unit } from './types';
 import { DAY, deviceZone, resolveWall, wallAt, type Disambiguation } from './zone';
 
 export interface Occurrence {
@@ -183,6 +184,8 @@ export interface ReadoutValue {
   age?: { international: number; counting: number; year: number };
   percent?: { fraction: number; elapsedDays: number; remainingDays: number; totalDays: number };
   gestation?: { weeks: number; days: number; trimester: 1 | 2 | 3; totalDays: number };
+  business?: { days: number; holidays: HolidaySet | null };
+  counter?: Counter;
   crossedGap: boolean;
   /** For 'origin' basis on repeating events: counting from the original date. */
   fromOrigin: boolean;
@@ -190,7 +193,12 @@ export interface ReadoutValue {
 
 const DATE_UNITS = new Set<Unit>(['years', 'months', 'weeks', 'days']);
 
-export function readoutValue(ev: CountEvent, st: CountState, r: Readout): ReadoutValue {
+export interface ReadoutContext {
+  /** Public holiday set for working-day counts. */
+  holidays: HolidaySet | null;
+}
+
+export function readoutValue(ev: CountEvent, st: CountState, r: Readout, ctx: ReadoutContext = { holidays: null }): ReadoutValue {
   const base = { readout: r, mode: st.mode, isToday: st.isToday, crossedGap: false, fromOrigin: false, units: r.units };
   switch (r.style) {
     case 'dday': {
@@ -241,6 +249,19 @@ export function readoutValue(ev: CountEvent, st: CountState, r: Readout): Readou
         gestation: { weeks, days, trimester: weeks < 14 ? 1 : weeks < 28 ? 2 : 3, totalDays: total },
       };
     }
+    case 'business': {
+      // Working days from today up to the day before the date (counting
+      // down), or from the date up to yesterday (counting up).
+      const fromOrigin = r.basis === 'origin' && ev.repeat !== 'none';
+      const target = dayIn(fromOrigin ? st.origin : st.target, ev, st.zone);
+      const until = target > st.todayDay;
+      const days = until
+        ? businessDaysBetween(ctx.holidays, st.todayDay, target)
+        : businessDaysBetween(ctx.holidays, target, st.todayDay);
+      return { ...base, direction: until ? 'until' : 'since', values: { days }, fromOrigin, business: { days, holidays: ctx.holidays } };
+    }
+    case 'counter':
+      return { ...base, direction: 'none', values: {}, counter: ev.counter ?? { label: '', value: 0, step: 1, unit: '' } };
     case 'units':
       return unitsValue(ev, st, r, base);
   }

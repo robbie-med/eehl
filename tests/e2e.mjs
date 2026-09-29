@@ -124,7 +124,7 @@ try {
     assert.equal(backup.data.events.length, 2);
     await page.evaluate(() => localStorage.setItem('eehl:data:v1', JSON.stringify({ version: 1, events: [], lists: [], settings: { locale: 'en' } })));
     await page.reload();
-    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByText('Import backup').click()]);
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: 'Import backup (.json)' }).click()]);
     await chooser.setFiles(file);
     await page.getByText('Imported 2 events').waitFor();
     await page.goto(base);
@@ -135,6 +135,110 @@ try {
     await page.goto(base + '#/upcoming');
     await page.getByRole('radio', { name: '365 days' }).click();
     await page.getByText('300 days', { exact: true }).first().waitFor();
+  });
+
+  await step('filter chips narrow the list', async () => {
+    await page.goto(base);
+    await page.getByRole('button', { name: 'Filter' }).click();
+    await page.getByRole('button', { name: 'Counting down' }).click();
+    // Mom's birthday counts down; Us counts up.
+    await page.locator('.card', { hasText: "Mom's birthday" }).waitFor();
+    assert.equal(await page.locator('.card', { hasText: 'Us' }).count(), 0);
+    await page.getByRole('button', { name: 'Clear filters' }).click();
+    assert.equal(await page.locator('.card').count(), 2);
+  });
+
+  await step('bulk select, delete, undo', async () => {
+    await page.getByRole('button', { name: 'Select', exact: true }).click();
+    await page.getByRole('button', { name: 'Select all' }).click();
+    await page.getByText('2 selected').waitFor();
+    await page.locator('.bulk-actions .btn.danger').click();
+    await page.locator('.sheet .btn.danger').click();
+    await page.getByText('Deleted 2').waitFor();
+    assert.equal(await page.locator('.card').count(), 0);
+    await page.locator('.toast-action').click();
+    await page.locator('.card').nth(1).waitFor();
+    assert.equal(await page.locator('.card').count(), 2);
+  });
+
+  let shareLink = '';
+  await step('share an event as a QR link and open it', async () => {
+    await page.locator('.card', { hasText: 'Us' }).click({ button: 'right' });
+    await page.locator('.menu button', { hasText: 'Share via QR code' }).click();
+    await page.locator('svg.qr').waitFor();
+    await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
+    await page.getByRole('button', { name: 'Copy link' }).click();
+    shareLink = await page.evaluate(() => navigator.clipboard.readText());
+    assert.match(shareLink, /#\/import\/z[A-Za-z0-9_-]+$/);
+    await page.getByRole('button', { name: 'Done' }).click();
+    await page.goto(shareLink);
+    await page.getByText('Shared with you').waitFor();
+    await page.getByRole('button', { name: 'Add to eehl' }).click();
+    await page.getByText('Added 1 events').waitFor();
+    assert.equal(await page.locator('.card', { hasText: 'Us' }).count(), 2);
+  });
+
+  await step('import a calendar file', async () => {
+    await page.goto(base + '#/settings');
+    const ics = 'BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nUID:x1\r\nSUMMARY:Flight home\r\nDTSTART;VALUE=DATE:20301224\r\nEND:VEVENT\r\nEND:VCALENDAR\r\n';
+    const [chooser] = await Promise.all([page.waitForEvent('filechooser'), page.getByRole('button', { name: 'Import calendar (.ics)' }).click()]);
+    await chooser.setFiles({ name: 'cal.ics', mimeType: 'text/calendar', buffer: Buffer.from(ics) });
+    await page.locator('.sheet .btn.primary').click();
+    await page.getByText('Added 1 events').waitFor();
+  });
+
+  await step('holidays and solar terms appear in Upcoming', async () => {
+    await page.goto(base + '#/settings');
+    await page.getByLabel('Public holidays').selectOption('KR');
+    await page.getByText('Show solar terms').click();
+    await page.goto(base + '#/upcoming');
+    await page.getByRole('radio', { name: '365 days' }).click();
+    await page.locator('.agenda-mark.holiday').first().waitFor();
+    await page.locator('.agenda-mark.term').first().waitFor();
+  });
+
+  await step('working-days readout', async () => {
+    await page.goto(base);
+    await page.locator('.card', { hasText: 'Flight home' }).click();
+    await page.getByRole('button', { name: 'Edit' }).click();
+    await page.locator('select[aria-label="Add a milestone rule"]').waitFor();
+    await page.getByRole('button', { name: 'Add readout' }).click();
+    await page.locator('select[aria-label="Style"]').last().selectOption('business');
+    await page.locator('.topbar .btn.primary').click();
+    await page.getByText(/working days/).first().waitFor();
+  });
+
+  await step('life view draws weeks from a birthday', async () => {
+    await page.goto(base + '#/life');
+    await page.locator('select[aria-label="A birthday event"]').selectOption({ label: "🎂 Mom's birthday" });
+    await page.locator('.life-grid canvas').waitFor();
+    assert.match(await page.locator('.life-stats').textContent(), /weeks lived/);
+  });
+
+  await step('app lock encrypts data and asks for the passphrase', async () => {
+    await page.goto(base + '#/settings');
+    await page.getByRole('button', { name: 'Turn on app lock' }).click();
+    await page.getByLabel('Passphrase', { exact: true }).fill('hunter22');
+    await page.getByLabel('Repeat passphrase').fill('hunter22');
+    await page.locator('form .btn.primary', { hasText: 'Turn on app lock' }).click();
+    await page.getByRole('button', { name: 'Lock now' }).waitFor();
+    await page.waitForTimeout(400);
+    const stored = await page.evaluate(() => localStorage.getItem('eehl:data:v1'));
+    assert.ok(stored.includes('"encrypted"') && !stored.includes("Mom's birthday"), 'stored data is encrypted');
+    await page.reload();
+    await page.getByText('eehl is locked').waitFor();
+    await page.getByLabel('Passphrase').fill('wrong');
+    await page.getByRole('button', { name: 'Unlock' }).click();
+    await page.getByText('Wrong passphrase.').waitFor();
+    await page.getByLabel('Passphrase').fill('hunter22');
+    await page.getByRole('button', { name: 'Unlock' }).click();
+    // In-app navigation only: a reload would (correctly) lock again.
+    await page.evaluate(() => (location.hash = '#/'));
+    await page.locator('.card', { hasText: "Mom's birthday" }).waitFor();
+    await page.evaluate(() => (location.hash = '#/settings'));
+    await page.getByRole('button', { name: 'Turn off app lock' }).click();
+    await page.waitForTimeout(400);
+    assert.ok((await page.evaluate(() => localStorage.getItem('eehl:data:v1'))).includes("Mom's birthday"));
   });
 
   await step('language switch to Korean', async () => {

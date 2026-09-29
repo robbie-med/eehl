@@ -87,6 +87,15 @@ export function explain(ev: CountEvent, st: CountState, rv: ReadoutValue, f: For
     case 'gestation':
       lines.push(e.gestation);
       break;
+    case 'business': {
+      const set = rv.business?.holidays;
+      lines.push(f.t(e.business, { set: set ? f.s.settingsExtra.countries[set] : e.businessNone }));
+      if (set) lines.push(e.holidayRules);
+      break;
+    }
+    case 'counter':
+      lines.push(e.counter);
+      break;
   }
   return lines;
 }

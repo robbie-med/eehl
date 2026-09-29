@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'preact/hooks';
+import { useState } from 'preact/hooks';
 import { dayNumber, fromDayNumber, parseISODate, toISODate } from '../core/civil';
 import { anchorWall } from '../core/count';
 import { dayNumberToLunar, inLunarRange, leapMonthOf, lunarToDayNumber, type LunarCalendar, type LunarDate } from '../core/lunar';
@@ -6,6 +6,7 @@ import { anchorInstant, newEvent, presetFields, PRESETS, readout, reminder, rule
 import {
   UNITS,
   type CalendarSystem,
+  type Counter,
   type CountEvent,
   type MilestoneRule,
   type MilestoneType,
@@ -15,15 +16,14 @@ import {
   type Reminder,
   type Unit,
 } from '../core/types';
-import { deviceZone, knownZones, wallAt } from '../core/zone';
-import { data, fmt, settings, t, upsertEvent } from '../state/store';
+import { deviceZone, wallAt } from '../core/zone';
+import { data, fmt, lang, settings, t, upsertEvent } from '../state/store';
 import { Field, Icon, Section, Segmented, Select, showToast, Toggle } from './components';
 import { deleteWithConfirm } from './Home';
-import { colorOf, PALETTE } from './present';
+import { orderedLists } from './Lists';
+import { ColorPicker, EmojiPicker, ZonePicker } from './pickers';
 import { back, go } from './router';
-import { isDarkTheme } from './theme';
 
-const EMOJI = ['💑', '❤️', '👶', '🍼', '🎂', '🎉', '💍', '🕯️', '🌸', '📝', '🎓', '🎖️', '✈️', '🏥', '🩺', '💪', '🏠', '🐶', '🐱', '⭐', '🌙', '☀️', '🎄', '📅'];
 
 interface Draft {
   ev: CountEvent;
@@ -61,8 +61,18 @@ function freshEvent(preset: PresetId): CountEvent {
     zone,
     now: Date.now(),
     leapRule: settings.value.leapRule,
+    tradition: lang.value === 'ja' ? 'ja' : 'ko',
+    lang: lang.value,
   });
+  if (ev.counter) ev.counter = { ...ev.counter, label: t.value.counterUi.defaultLabel, unit: t.value.counterUi.defaultUnit };
   return ev;
+}
+
+/** A new event in a list gets the list's default readout, unless it already has one like it. */
+function withListReadout(readouts: Readout[], listId: string | null): Readout[] {
+  const def = listId ? data.value.lists.find((l) => l.id === listId)?.defaultReadout : null;
+  if (!def || readouts.some((r) => r.style === def.style && r.units.join() === def.units.join())) return readouts;
+  return [...readouts, readout(def.style, def.units)];
 }
 
 export function Editor(props: { id?: string; preset?: string }) {
@@ -72,11 +82,9 @@ export function Editor(props: { id?: string; preset?: string }) {
   const isNew = !existing;
   const [d, setD] = useState<Draft>(() => draftFrom(existing ?? freshEvent((PRESETS.some((p) => p.id === props.preset) ? props.preset : 'custom') as PresetId)));
   const [error, setError] = useState('');
-  const zones = useMemo(() => knownZones(), []);
   const ev = d.ev;
   const set = (patch: Partial<CountEvent>) => setD({ ...d, ev: { ...d.ev, ...patch } });
   const setDraft = (patch: Partial<Draft>) => setD({ ...d, ...patch });
-  const dark = isDarkTheme();
 
   const isLunarCal = d.calendar !== 'gregorian';
   const lunarCal = d.calendar as LunarCalendar;
@@ -85,7 +93,17 @@ export function Editor(props: { id?: string; preset?: string }) {
 
   const changePreset = (p: PresetId) => {
     const info = PRESETS.find((x) => x.id === p)!;
-    setD({ ...d, ev: { ...d.ev, preset: p, emoji: info.emoji, color: info.color, ...presetFields(p, 'ko') } });
+    setD({
+      ...d,
+      ev: {
+        ...d.ev,
+        preset: p,
+        emoji: info.emoji,
+        color: info.color,
+        ...presetFields(p, lang.value === 'ja' ? 'ja' : 'ko', lang.value),
+        counter: p === 'exam' ? (d.ev.counter ?? { label: s.counterUi.defaultLabel, value: 0, step: 1, unit: s.counterUi.defaultUnit }) : d.ev.counter,
+      },
+    });
   };
 
   const changeCalendar = (c: CalendarSystem) => {
@@ -131,7 +149,7 @@ export function Editor(props: { id?: string; preset?: string }) {
       repeat: isLunarCal && ev.repeat === 'monthly' ? 'yearly' : ev.repeat,
       spanStartMs: span ? anchorInstant(span, null, ev.zone) : null,
       tags: d.tags.split(',').map((x) => x.trim()).filter(Boolean),
-      readouts: ev.readouts.length ? ev.readouts : [readout('dday')],
+      readouts: withListReadout(ev.readouts.length ? ev.readouts : [readout('dday')], isNew ? ev.listId : null),
     };
     upsertEvent(final);
     showToast(s.editor.saved);
@@ -188,40 +206,27 @@ export function Editor(props: { id?: string; preset?: string }) {
             maxLength={120}
           />
         </Field>
-        <Field label={s.editor.emoji}>
-          <div class="emoji-row">
-            <input class="input emoji-input" value={ev.emoji} maxLength={8} onInput={(e) => set({ emoji: (e.target as HTMLInputElement).value })} aria-label={s.editor.emoji} />
-            <div class="emoji-picks">
-              {EMOJI.map((e) => (
-                <button key={e} type="button" class={'emoji-pick' + (ev.emoji === e ? ' on' : '')} onClick={() => set({ emoji: e })}>
-                  {e}
-                </button>
-              ))}
-            </div>
-          </div>
-        </Field>
+        <div class="field">
+          <span class="field-label">{s.editor.emoji}</span>
+          <EmojiPicker value={ev.emoji} onChange={(emoji) => set({ emoji })} />
+        </div>
         <div class="field">
           <span class="field-label">{s.editor.color}</span>
-          <div class="swatches" role="radiogroup" aria-label={s.editor.color}>
-            {Object.keys(PALETTE).map((c) => (
-              <button
-                key={c}
-                role="radio"
-                aria-checked={ev.color === c}
-                aria-label={f.t(s.a11y.color, { name: s.colors[c] })}
-                class={'swatch' + (ev.color === c ? ' on' : '')}
-                style={{ background: colorOf(c, dark) }}
-                onClick={() => set({ color: c })}
-              />
-            ))}
-          </div>
+          <ColorPicker value={ev.color} onChange={(color) => set({ color })} />
         </div>
         {data.value.lists.length > 0 && (
           <Field label={s.editor.list}>
             <Select
               value={ev.listId ?? ''}
-              options={[{ value: '', label: s.editor.noList }, ...data.value.lists.map((l) => ({ value: l.id, label: l.name }))]}
-              onChange={(v) => set({ listId: v || null })}
+              options={[
+                { value: '', label: s.editor.noList },
+                ...orderedLists(data.value.lists).map(({ list, depth }) => ({ value: list.id, label: (depth ? '　' : '') + list.name })),
+              ]}
+              onChange={(v) => {
+                const list = data.value.lists.find((l) => l.id === v);
+                // New events pick up the list's default time zone.
+                set({ listId: v || null, ...(isNew && list?.defaultZone ? { zone: list.defaultZone } : {}) });
+              }}
             />
           </Field>
         )}
@@ -309,15 +314,10 @@ export function Editor(props: { id?: string; preset?: string }) {
             <input class="input" type="time" value={d.time} onInput={(e) => setDraft({ time: (e.target as HTMLInputElement).value })} />
           </Field>
         )}
-        <Field label={s.editor.zone}>
-          <select class="input" value={ev.zone} onChange={(e) => set({ zone: (e.target as HTMLSelectElement).value })}>
-            {(zones.includes(ev.zone) ? zones : [ev.zone, ...zones]).map((z) => (
-              <option key={z} value={z}>
-                {z.replace(/_/g, ' ')}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <div class="field">
+          <span class="field-label">{s.editor.zone}</span>
+          <ZonePicker value={ev.zone} onChange={(zone) => zone && set({ zone })} />
+        </div>
         <Field label={s.editor.displayZone}>
           <Segmented
             value={ev.displayZone}
@@ -379,6 +379,8 @@ export function Editor(props: { id?: string; preset?: string }) {
       <MilestonesEditor rules={ev.milestones} onChange={(milestones) => set({ milestones })} />
       <RemindersEditor reminders={ev.reminders} onChange={(reminders) => set({ reminders })} />
 
+      <CounterEditor counter={ev.counter} onChange={(counter) => set({ counter })} />
+
       <Section title={s.editor.appearance}>
         <Toggle label={s.editor.private} hint={s.editor.privateHint} checked={ev.private} onChange={(v) => set({ private: v })} />
       </Section>
@@ -419,7 +421,7 @@ function move<T>(list: T[], i: number, delta: number): T[] {
 
 function ReadoutsEditor(props: { readouts: Readout[]; repeat: boolean; onChange: (r: Readout[]) => void }) {
   const s = t.value;
-  const styles: ReadoutStyle[] = ['dday', 'units', 'age', 'percent', 'gestation'];
+  const styles: ReadoutStyle[] = ['dday', 'units', 'age', 'percent', 'gestation', 'business', 'counter'];
   const upd = (i: number, patch: Partial<Readout>) => props.onChange(props.readouts.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   return (
     <Section title={s.editor.display}>
@@ -511,6 +513,10 @@ function newRule(type: MilestoneType): MilestoneRule {
       return rule({ type, tradition: 'ko', notify: true });
     case 'custom-day':
       return rule({ type, day: 1000, label: '', notify: true });
+    case 'wedding':
+      return rule({ type, names: 'auto', notify: true });
+    case 'span-months':
+      return rule({ type, steps: [{ months: 6, label: '' }], notify: true });
     default:
       return rule({ type, notify: true } as never);
   }
@@ -519,7 +525,7 @@ function newRule(type: MilestoneType): MilestoneRule {
 function MilestonesEditor(props: { rules: MilestoneRule[]; onChange: (r: MilestoneRule[]) => void }) {
   const s = t.value;
   const m = s.milestones;
-  const types: MilestoneType[] = ['couple', 'baby', 'yearly', 'round-days', 'every-n-days', 'monthly', 'long-life', 'wedding', 'custom-day'];
+  const types: MilestoneType[] = ['couple', 'baby', 'yearly', 'round-days', 'every-n-days', 'monthly', 'long-life', 'wedding', 'span-months', 'custom-day'];
   const upd = (i: number, patch: Partial<MilestoneRule>) => props.onChange(props.rules.map((r, j) => (j === i ? ({ ...r, ...patch } as MilestoneRule) : r)));
   const num = (v: string, min: number) => Math.max(min, Math.floor(Number(v) || min));
   return (
@@ -561,6 +567,52 @@ function MilestonesEditor(props: { rules: MilestoneRule[]; onChange: (r: Milesto
                 onChange={(v) => upd(i, { tradition: v })}
               />
             </Field>
+          )}
+          {r.type === 'wedding' && (
+            <Field label={m.names}>
+              <Select
+                value={r.names ?? 'auto'}
+                options={[
+                  { value: 'auto', label: m.namesAuto },
+                  { value: 'en', label: m.namesEn },
+                  { value: 'ko', label: m.namesKo },
+                  { value: 'ja', label: m.namesJa },
+                  { value: 'zh', label: m.namesZh },
+                ]}
+                onChange={(v) => upd(i, { names: v })}
+              />
+            </Field>
+          )}
+          {r.type === 'span-months' && (
+            <div class="steps">
+              <p class="field-hint">{m.stepsHint}</p>
+              {r.steps.map((step, j) => (
+                <div class="step-row" key={j}>
+                  <input
+                    class="input narrow"
+                    type="number"
+                    min={1}
+                    aria-label={m.stepMonths}
+                    value={step.months}
+                    onInput={(e) => upd(i, { steps: r.steps.map((x, k) => (k === j ? { ...x, months: num((e.target as HTMLInputElement).value, 1) } : x)) })}
+                  />
+                  <span class="muted">{m.stepMonths}</span>
+                  <input
+                    class="input"
+                    aria-label={m.stepLabel}
+                    placeholder={m.stepLabel}
+                    value={step.label}
+                    onInput={(e) => upd(i, { steps: r.steps.map((x, k) => (k === j ? { ...x, label: (e.target as HTMLInputElement).value } : x)) })}
+                  />
+                  <button class="icon-btn small" aria-label={s.common.remove} onClick={() => upd(i, { steps: r.steps.filter((_, k) => k !== j) })}>
+                    <Icon name="trash" size={18} />
+                  </button>
+                </div>
+              ))}
+              <button class="btn ghost small" onClick={() => upd(i, { steps: [...r.steps, { months: (r.steps[r.steps.length - 1]?.months ?? 0) + 6, label: '' }] })}>
+                <Icon name="plus" size={16} /> {m.addStep}
+              </button>
+            </div>
           )}
           {r.type === 'custom-day' && (
             <div class="two">
@@ -635,6 +687,42 @@ function RemindersEditor(props: { reminders: Reminder[]; onChange: (r: Reminder[
       <button class="btn ghost" onClick={() => props.onChange([...props.reminders, reminder('event', 1)])}>
         <Icon name="plus" size={18} /> {e.addReminder}
       </button>
+    </Section>
+  );
+}
+
+function CounterEditor(props: { counter: Counter | null; onChange: (c: Counter | null) => void }) {
+  const s = t.value;
+  const c = s.counterUi;
+  const cur = props.counter;
+  return (
+    <Section title={c.title}>
+      <Toggle
+        label={c.enable}
+        hint={c.hint}
+        checked={!!cur}
+        onChange={(on) => props.onChange(on ? (cur ?? { label: c.defaultLabel, value: 0, step: 1, unit: c.defaultUnit }) : null)}
+      />
+      {cur && (
+        <div class="two">
+          <Field label={c.label}>
+            <input class="input" value={cur.label} onInput={(e) => props.onChange({ ...cur, label: (e.target as HTMLInputElement).value })} />
+          </Field>
+          <Field label={c.unit}>
+            <input class="input" value={cur.unit} onInput={(e) => props.onChange({ ...cur, unit: (e.target as HTMLInputElement).value })} />
+          </Field>
+          <Field label={c.step}>
+            <input
+              class="input"
+              type="number"
+              min={0.25}
+              step={0.25}
+              value={cur.step}
+              onInput={(e) => props.onChange({ ...cur, step: Math.max(0.25, Number((e.target as HTMLInputElement).value) || 1) })}
+            />
+          </Field>
+        </div>
+      )}
     </Section>
   );
 }

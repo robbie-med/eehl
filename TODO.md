@@ -1,6 +1,6 @@
 # TODO
 
-State as of this commit: the **web app / PWA is complete** for the MVP plus most of v1.0. The counting engine is tested and pinned by golden vectors, and CI and the Pages deploy are set up. The **native Android app is not started**; the plan is below.
+State as of this commit: the **web app / PWA is complete**: every spec feature for the web except sync (skipped on purpose). The counting engine is tested and pinned by golden vectors, the UI by an end-to-end test of ~20 flows, and CI and the Pages deploy are set up. The **native Android app is not started**; the plan is below.
 
 ---
 
@@ -45,6 +45,11 @@ Port `src/core/*.ts` file for file into a JVM-only module with no Android import
 | `explain.ts` | `Explain.kt` | Returns string resource IDs + args. |
 | `backup.ts` | `Backup.kt` | **Same JSON format** (`{"app":"eehl","format":1,"data":{…}}`, `AppData` version 1) so backups move between the PWA and Android. Encrypted backups use PBKDF2-SHA256 (310,000 iterations) + AES-256-GCM, via `javax.crypto`. ICS/CSV identical. |
 | `presets.ts` | `Presets.kt` | Same defaults. |
+| `solarterms.ts` + `solarterm-data.ts` | `SolarTerms.kt` | Load `spec/solar-terms.json` (UTC minutes per term, 1900–2100). |
+| `holidays.ts` | `Holidays.kt` | Pure rules; port with its tests (substitute holidays, Japan's citizens' holiday, HK Easter). |
+| `era.ts` | `Era.kt` | Five era start dates. |
+| `importers.ts` | `Importers.kt` | .ics / .csv / .vcf parsing, same results. |
+| `sharelink.ts` | `ShareLink.kt` | Same link format (`#/import/z…` / `e…`, deflate-raw + optional AES-GCM), so a QR from the PWA opens in the Android app and vice versa. Register the web origin as an App Link for `#/import/`. |
 | `i18n/format.ts` | `Format.kt` | D-day strings, 만/억 grouping, date formats (DDMMMYYYY, ISO, YYYY.MM.DD, locale). |
 
 - [ ] **Golden test**: a JUnit test that reads `spec/golden.json` and reproduces every case (lunar, anniversaries, diffs, 20 events × 11 moments × 10 readouts, milestones). This is the acceptance criterion for the port. When the web engine changes, the golden file changes and the Kotlin test tells you what to update.
@@ -57,7 +62,9 @@ Screens, matching the web app (`src/ui/*`):
 - [ ] **Home**: pinned section, lists (collapsible), cards in full / compact / grid modes; tap the number to cycle readouts; swipe right to pin, left to archive (with undo); long-press menu (pin, edit, share image, duplicate, archive, delete); search; archive link; FAB. Empty state with the 8 preset tiles.
 - [ ] **Event detail**: hero with the big readout, all readouts (tap → "how was this computed" bottom sheet), next milestones, timeline (past/today/future), notes, tags.
 - [ ] **Editor**: preset chips, title, emoji, 12 colors, list; calendar (solar / 음력 / 农历) with lunar year/month/day + leap toggle (enabled only when that year has that leap month) and the resolved solar date; all-day/time; time zone; display zone; span start; repeat / direction / end behavior / day-one / inclusive end; readouts editor; milestone rules editor; reminders editor; private; notes; tags.
-- [ ] **Upcoming**: 30/90/365-day agenda.
+- [ ] **Upcoming**: 30/90/365-day agenda with holiday and solar-term overlays.
+- [ ] **Life view**: weeks-of-life grid (a custom `View` drawing on a `Canvas`; see `src/ui/Life.tsx`).
+- [ ] Filters (tags, kinds, direction, milestone this month), multi-select bulk edit, nested lists with per-list defaults, delete undo, counter (+/−) on the event page, QR share (`uqr`'s algorithm is ~1k lines; or a small QR encoder in Kotlin) and link import, app lock (encrypted file + `BiometricPrompt`), daily backups to a SAF folder, 5 UI languages (copy `src/i18n/*.ts` into `values-*/strings.xml`).
 - [ ] **Settings**: everything in `src/ui/Settings.tsx`, plus exact-alarm status, notification permission, and Material You toggle.
 - [ ] Share card: render the event to a `Bitmap` (same layout as `src/ui/share.ts`), share through `FileProvider`.
 - [ ] Material You: on API 31+, take accents from `android.R.color.system_accent1_*`. True-black AMOLED theme.
@@ -86,35 +93,14 @@ Release:
 
 ---
 
-## 2. Web app follow-ups (from the spec, not yet built)
+## 2. Web app: what's left
 
-v1.0 items:
+Everything in the spec's web scope is built, except:
 
-- [ ] Japanese, Simplified and Traditional Chinese UI (`src/i18n/ja.ts`, `zh-Hans.ts`, `zh-Hant.ts`; the type system forces every key).
-- [ ] Solar terms (24절기 / 二十四节气) as an optional overlay in Upcoming. Compute them at build time like the lunar tables.
-- [ ] Japanese era display (令和) as a date format.
-- [ ] Public holiday sets (KR, JP, CN, TW, HK, US) bundled offline, plus a business-days readout.
-- [ ] Import ICS and CSV files (export already exists).
-- [ ] Tags and filter chips on Home (tags are stored and searched, but there's no chip UI); "has milestone this month" filter.
-- [ ] Bulk edit: multi-select to move lists, change color, apply a readout.
-- [ ] Per-list default readout / default time zone / sort (the list model has name, color and collapsed only).
-- [ ] Gradients and custom hex colors in the color picker (hex is supported in the data model, not in the UI).
-
-v1.x items:
-
-- [ ] Life view: weeks-of-life grid (52 columns per year) with events as dots.
-- [ ] QR partner sharing: encrypt one event or list into a QR code; scan to import.
-- [ ] Sync: a Syncthing-watched folder (Android), WebDAV/Nextcloud (separate "sync" flavor only).
-- [ ] Conflict log view (merge is already last-writer-wins by `editedAt`).
-
-Polish:
-
-- [ ] PWA reminders only fire while the app is open (browsers can't schedule local notifications). Keep pointing people to ICS export or the Android app. Revisit if the Notification Triggers API ever ships.
-- [ ] Emoji picker: currently a text field plus 24 suggestions.
-- [ ] Time zone picker: currently a long `<select>`; add search.
-- [ ] Undo for delete (archive already has undo).
-
----
+- [ ] **Sync (Syncthing folder, WebDAV/Nextcloud)**: skipped on purpose for now. The groundwork is in place: `mergeData` does last-writer-wins per event with deletion records (`AppData.deleted`) and reports conflicts, so a sync layer only needs to read/merge/write one file. Daily automatic backups to a folder (a Syncthing folder works) are built.
+- [ ] Browsers cannot schedule notifications while the PWA is closed; reminders fire only while it's open. ICS export and the Android app cover the rest. Revisit if the Notification Triggers API ever ships.
+- [ ] Importers for specific iOS countdown apps' export formats (the generic CSV importer recognises title/date columns in English, Korean, Japanese and Chinese, which covers most exports).
+- [ ] Fonts are the system's (no network font loading, no bundled CJK fonts, to keep the app small). Bundle a subset of Pretendard / Noto Sans CJK if a consistent look matters more than size.
 
 ## 3. Decisions already made
 
